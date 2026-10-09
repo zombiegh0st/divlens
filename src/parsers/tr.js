@@ -17,7 +17,7 @@ export function detect(text) {
 // Returns { transactions, ignored, errors }.
 // Unknown types are kept as type 'unknown' so the UI can report them.
 // Personal fields (description, counterparty_*, payment_reference) are never read.
-export function parse(text, { source = '' } = {}) {
+export function parse(text) {
   const rows = parseCsv(text);
   const header = rows.shift()?.fields || [];
   const col = Object.fromEntries(header.map((name, i) => [name, i]));
@@ -29,7 +29,7 @@ export function parse(text, { source = '' } = {}) {
     if (fields.length === 1 && fields[0] === '') continue;
     try {
       const get = (name) => (fields[col[name]] ?? '').trim();
-      const tx = toTransaction(get, source);
+      const tx = toTransaction(get);
       if (tx) transactions.push(tx);
       else ignored++;
     } catch (err) {
@@ -39,7 +39,7 @@ export function parse(text, { source = '' } = {}) {
   return { transactions, ignored, errors };
 }
 
-function toTransaction(get, source) {
+function toTransaction(get) {
   const id = get('transaction_id');
   const date = get('date');
   const rawType = get('type');
@@ -47,7 +47,7 @@ function toTransaction(get, source) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`Ungültiges Datum "${date}"`);
   if (rawType.startsWith('TRANSFER_')) return null;
 
-  const base = { id, broker: 'tr', date, isin: get('symbol'), name: get('name'), source };
+  const base = { id, broker: 'tr', date, isin: get('symbol'), name: get('name') };
   const type = TYPES[rawType];
   if (!type) {
     return { ...base, type: 'unknown', rawType, amount: toCents(get('amount')), currency: get('currency') };

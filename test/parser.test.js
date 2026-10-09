@@ -7,7 +7,7 @@ import { toCents } from '../src/csv.js';
 
 const fixture = readFileSync(new URL('./fixtures/tr-export.csv', import.meta.url), 'utf8');
 const header = fixture.split('\n')[0];
-const result = parse(fixture, { source: 'tr-export.csv' });
+const result = parse(fixture);
 const byId = (id) => result.transactions.find((t) => t.id === id);
 
 test('detects the Trade Republic format', () => {
