@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#111111">
+  <title>DivLens</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="src/ui/app.js"></script>
+</head>
+<body>
+  <header>
+    <h1>DivLens</h1>
+    <nav>
+      <a href="#overview">Übersicht</a>
+      <a href="#dividends">Dividenden</a>
+      <a href="#transactions">Umsätze</a>
+      <a href="#import">Import</a>
+      <a href="#settings">Daten</a>
+    </nav>
+  </header>
+  <main id="view"></main>
+
+  <dialog id="fresh-dialog">
+    <form method="dialog">
+      <p><strong>Neuanfang</strong></p>
+      <p><span id="fresh-count"></span> vorhandene Transaktionen werden gelöscht. Kurse und Einstellungen bleiben erhalten.</p>
+      <label><input type="checkbox" id="fresh-backup" checked> Vorher JSON-Backup herunterladen</label>
+      <div class="row">
+        <button value="cancel">Abbrechen</button>
+        <button value="ok" class="danger">Löschen und importieren</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
