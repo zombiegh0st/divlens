@@ -2,6 +2,8 @@
 
 Minimal, local-first portfolio viewer (PWA). Imports a Trade Republic CSV export and shows performance relative to the invested amount, optionally including dividends. All data stays in the browser (IndexedDB).
 
+**Open the app:** https://zombiegh0st.github.io/divlens/
+
 ## Run
 
 No build step. Serve the folder statically, e.g.:
