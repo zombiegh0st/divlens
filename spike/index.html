@@ -19,10 +19,12 @@
   <p class="muted">Wegwerf-Testseite, nicht Teil der App. Ruft Tageskurse direkt aus dem Browser ab, ohne Server und ohne Proxy. Der Key wird als Header gesendet, nie in der URL.</p>
 
   <h2>API-Key</h2>
-  <input type="password" id="key" autocomplete="off" spellcheck="false" placeholder="Twelve-Data-API-Key">
+  <input type="password" id="key" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="Twelve-Data-API-Key">
   <div class="row">
     <label><input type="checkbox" id="remember"> In diesem Browser merken</label>
+    <label><input type="checkbox" id="show"> Key anzeigen</label>
   </div>
+  <p class="muted" id="key-info"></p>
   <p class="muted">Ohne Haken bleibt der Key nur im Speicher dieser Seite. Mit Haken liegt er unverschlüsselt im localStorage dieser Domain.</p>
 
   <h2>Abfrage</h2>
@@ -67,20 +69,38 @@ try {
 
 function syncStorage() {
   try {
-    if ($('remember').checked && $('key').value) localStorage.setItem(STORAGE_KEY, $('key').value.trim());
+    if ($('remember').checked && $('key').value) localStorage.setItem(STORAGE_KEY, apiKey());
     else localStorage.removeItem(STORAGE_KEY);
   } catch {}
 }
 $('remember').addEventListener('change', syncStorage);
 $('key').addEventListener('change', syncStorage);
 
-const apiKey = () => $('key').value.trim();
+// Strips whitespace and invisible characters that often sneak in via copy and paste.
+const apiKey = () => $('key').value.replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '');
+
+// Shows length and last 4 characters so the user can compare with the dashboard. Never in the report.
+function keyInfo() {
+  const raw = $('key').value;
+  const key = apiKey();
+  if (!raw) { $('key-info').textContent = ''; return; }
+  const removed = raw.length - key.length;
+  const odd = /[^A-Za-z0-9]/.test(key);
+  $('key-info').textContent = `Länge ${key.length}, endet auf …${key.slice(-4)}`
+    + (removed ? `, ${removed} Leer-/Steuerzeichen entfernt` : '')
+    + (odd ? ', enthält Sonderzeichen (prüfen!)' : '');
+}
+$('key').addEventListener('input', keyInfo);
+$('show').addEventListener('change', () => { $('key').type = $('show').checked ? 'text' : 'password'; });
+keyInfo();
 const redact = (text) => (apiKey() ? String(text).split(apiKey()).join('***') : String(text));
 
 // Returns { ok, cors, status, data, credits, error }.
-async function call(path, params, withKey = true) {
+// key: true = user key, false = no key, string = that key (only used for the public demo key).
+async function call(path, params, key = true) {
   const url = `${API}/${path}?${new URLSearchParams(params)}`;
-  const headers = withKey ? { Authorization: `apikey ${apiKey()}` } : {};
+  const value = key === true ? apiKey() : key;
+  const headers = value ? { Authorization: `apikey ${value}` } : {};
   let res;
   try {
     res = await fetch(url, { headers });
@@ -98,7 +118,7 @@ async function call(path, params, withKey = true) {
     status: res.status,
     data,
     credits: credits === null ? null : `${credits}${left === null ? '' : ` (übrig ${left})`}`,
-    error: failed ? redact(`HTTP ${res.status}${data?.code ? `, Code ${data.code}` : ''}: ${data?.message || res.statusText}`) : null,
+    error: failed ? redact(`HTTP ${res.status}${data?.code ? `, Code ${data.code}` : ''}: ${(data?.message || res.statusText).split('. ')[0]}`) : null,
   };
 }
 
@@ -147,6 +167,11 @@ async function run() {
   const probe = await call('time_series', { symbol: 'MAIN', interval: '1day', outputsize: 1 }, false);
   const probeText = probe.cors ? 'fehlgeschlagen (CORS blockiert schon einfache Anfragen)' : `Antwort erhalten (HTTP ${probe.status}), CORS für einfache Anfragen OK`;
 
+  // Public demo key (works for AAPL only): shows whether header auth works from the browser at all.
+  $('progress').textContent = 'Test mit öffentlichem Demo-Key …';
+  const demo = await call('time_series', { symbol: 'AAPL', interval: '1day', outputsize: 1 }, 'demo');
+  const demoText = demo.ok ? 'OK, Header-Authentifizierung funktioniert im Browser' : demo.error;
+
   const before = await usage();
   for (const [i, line] of lines.entries()) {
     if (i) { $('progress').textContent = `Warte wegen Limit (8/Minute) … ${i}/${lines.length}`; await sleep(DELAY_MS); }
@@ -167,12 +192,15 @@ async function run() {
     });
     render();
     if (r.status === 429) { rows.push({ label: 'Rest', ok: false, cors: false, error: 'Abgebrochen wegen Limit (429)' }); break; }
+    if (r.status === 401) { rows.push({ label: 'Rest', ok: false, cors: false, error: 'Abgebrochen: Key abgelehnt (401)' }); break; }
   }
   await sleep(1000);
   const after = await usage();
 
   const summary = `<dl>
       <dt>CORS-Test ohne Key</dt><dd>${esc(probeText)}</dd>
+      <dt>Demo-Key im Header</dt><dd>${esc(demoText)}</dd>
+      <dt>Eigener Key</dt><dd>Länge ${apiKey().length}</dd>
       <dt>Nutzung vorher</dt><dd>${esc(usageText(before))}</dd>
       <dt>Nutzung nachher</dt><dd>${esc(usageText(after))}</dd>
     </dl>`;
@@ -182,6 +210,8 @@ async function run() {
   lastReport = [
     `Spike Twelve Data, ${new Date().toISOString().slice(0, 10)}, ab ${from}`,
     `CORS-Test ohne Key: ${probeText}`,
+    `Demo-Key im Header: ${demoText}`,
+    `Eigener Key: Länge ${apiKey().length}, nur A-Z/0-9: ${/^[A-Za-z0-9]+$/.test(apiKey()) ? 'ja' : 'nein'}`,
     `Nutzung vorher: ${usageText(before)}`,
     `Nutzung nachher: ${usageText(after)}`,
     '',
