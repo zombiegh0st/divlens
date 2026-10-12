@@ -108,10 +108,18 @@ Rules:
 No price history, no graph. Rules:
 - Cache daily closes per position and EUR/USD in IndexedDB. Fetch only missing days, at most once per day.
 - Providers behind `getDailyHistory(symbol, from, to)`:
-  - First choice: [Twelve Data](https://twelvedata.com) (free plan reportedly 800 calls/day, 8/minute; unverified).
+  - First choice: [Twelve Data](https://twelvedata.com). Verified by the spike (2026-10-12, free "basic" plan): 800 credits/day, 8/minute, about 1 credit per `time_series` call.
   - Maybe later: [Alpha Vantage](https://www.alphavantage.co) (free plan 25 calls/day; full history may not be free).
   - Dropped: Finnhub (candles not in the free plan).
 - Symbol mapping ISIN -> symbol is editable in "Daten", with a suggestion from the provider's symbol search. Expected symbols: MAIN, ARCC, HTGC, CSWC (US), MUV2 (Xetra).
+
+Spike results (Twelve Data, free plan):
+- Browser access works: CORS OK, key sent as header `Authorization: apikey <key>`.
+- MAIN, ARCC, HTGC, CSWC: full daily history in USD. `EUR/USD`: daily, including weekends.
+- MUV2 on Xetra: not in the free plan (needs "Grow"). Decision: MUV2 uses the fallback below (no ADR workaround, no paid plan).
+- Credit headers are not readable from the browser; use `/api_usage` for usage.
+- EUR conversion: USD close / EUR/USD close of the same day; carry the last known rate over missing days.
+- Today's bar may not be final: do not cache it as a close, refetch it next time.
 - Respect rate limits: batch requests, show progress, stop cleanly on a limit error and resume on next open.
 - Fallback without key or without prices for a position:
   - Graph from transactions: "invested" as a step line plus cumulative dividends.
@@ -174,7 +182,7 @@ spike/            throwaway test pages, not part of the app or the service worke
 
 | Step | Content |
 |---|---|
-| 0 | Spike `spike/index.html`: fetch daily closes since 2026-03-01 for MAIN, ARCC, HTGC, CSWC, MUV2 (Xetra) and EUR/USD from the browser; report result to Alex |
+| 0 | Done: spike `spike/index.html` (results under "Price history") |
 | 1 | Data layer: price history cache, daily values from transactions, calculation rules with tests |
 | 2 | Overview with graph, period chips, options |
 | 3 | Position detail |
