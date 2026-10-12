@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex">
+  <title>DivLens Spike: Twelve Data</title>
+  <link rel="stylesheet" href="../styles.css">
+  <style>
+    textarea { width: 100%; font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+    input[type="password"] { width: 100%; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+    pre { white-space: pre-wrap; font-size: 0.8rem; }
+    .table-wrap { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Spike: Twelve Data im Browser</h1>
+  <p class="muted">Wegwerf-Testseite, nicht Teil der App. Ruft Tageskurse direkt aus dem Browser ab, ohne Server und ohne Proxy. Der Key wird als Header gesendet, nie in der URL.</p>
+
+  <h2>API-Key</h2>
+  <input type="password" id="key" autocomplete="off" spellcheck="false" placeholder="Twelve-Data-API-Key">
+  <div class="row">
+    <label><input type="checkbox" id="remember"> In diesem Browser merken</label>
+  </div>
+  <p class="muted">Ohne Haken bleibt der Key nur im Speicher dieser Seite. Mit Haken liegt er unverschlüsselt im localStorage dieser Domain.</p>
+
+  <h2>Abfrage</h2>
+  <label for="from" class="muted">Ab Datum</label>
+  <input type="text" id="from" value="2026-03-01" size="10">
+  <p class="muted">Ein Symbol pro Zeile, optional mit Parametern, z. B. <code>MUV2 exchange=XETR</code> oder <code>MUV2 mic_code=XETR</code>.</p>
+  <textarea id="symbols" rows="7">MAIN
+ARCC
+HTGC
+CSWC
+MUV2 exchange=XETR
+EUR/USD</textarea>
+  <div class="row">
+    <button class="primary" id="run">Abrufen</button>
+    <span class="muted" id="progress"></span>
+  </div>
+
+  <div id="out"></div>
+
+  <h2>Symbolsuche</h2>
+  <p class="muted">Zeigt, an welchen Börsen ein Symbol existiert und welcher Plan nötig ist.</p>
+  <div class="row">
+    <input type="text" id="search" value="MUV2" size="10">
+    <button id="search-run">Suchen</button>
+  </div>
+  <div id="search-out"></div>
+
+<script>
+const API = 'https://api.twelvedata.com';
+const STORAGE_KEY = 'divlens-spike-apikey';
+const DELAY_MS = 8000; // free plan: 8 requests per minute
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let lastReport = '';
+
+// Key handling: memory by default, localStorage only when opted in.
+try {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored) { $('key').value = stored; $('remember').checked = true; }
+} catch {}
+
+function syncStorage() {
+  try {
+    if ($('remember').checked && $('key').value) localStorage.setItem(STORAGE_KEY, $('key').value.trim());
+    else localStorage.removeItem(STORAGE_KEY);
+  } catch {}
+}
+$('remember').addEventListener('change', syncStorage);
+$('key').addEventListener('change', syncStorage);
+
+const apiKey = () => $('key').value.trim();
+const redact = (text) => (apiKey() ? String(text).split(apiKey()).join('***') : String(text));
+
+// Returns { ok, cors, status, data, credits, error }.
+async function call(path, params, withKey = true) {
+  const url = `${API}/${path}?${new URLSearchParams(params)}`;
+  const headers = withKey ? { Authorization: `apikey ${apiKey()}` } : {};
+  let res;
+  try {
+    res = await fetch(url, { headers });
+  } catch (err) {
+    return { ok: false, cors: true, error: `Netzwerk/CORS: ${err.message}` };
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  const credits = res.headers.get('api-credits-used');
+  const left = res.headers.get('api-credits-left');
+  const failed = !res.ok || !data || data.status === 'error';
+  return {
+    ok: !failed,
+    cors: false,
+    status: res.status,
+    data,
+    credits: credits === null ? null : `${credits}${left === null ? '' : ` (übrig ${left})`}`,
+    error: failed ? redact(`HTTP ${res.status}${data?.code ? `, Code ${data.code}` : ''}: ${data?.message || res.statusText}`) : null,
+  };
+}
+
+function parseLine(line) {
+  const [symbol, ...rest] = line.trim().split(/\s+/);
+  const extra = Object.fromEntries(rest.map((p) => p.split('=')).filter((p) => p.length === 2));
+  return { symbol, extra, label: line.trim() };
+}
+
+async function usage() {
+  const r = await call('api_usage', {});
+  return r.ok ? r.data : null;
+}
+
+function usageText(u) {
+  if (!u) return 'nicht verfügbar';
+  return Object.entries(u).filter(([k]) => k !== 'timestamp').map(([k, v]) => `${k}=${v}`).join(', ');
+}
+
+async function run() {
+  if (!apiKey()) { $('out').innerHTML = '<p class="notice">Bitte zuerst einen API-Key eingeben.</p>'; return; }
+  syncStorage();
+  $('run').disabled = true;
+  const from = $('from').value.trim();
+  const lines = $('symbols').value.split('\n').filter((l) => l.trim()).map(parseLine);
+  const rows = [];
+  const render = (extra = '') => {
+    $('out').innerHTML = `${extra}<div class="table-wrap"><table>
+      <tr><th>Symbol</th><th>Status</th><th>CORS-Fehler</th><th class="num">Punkte</th><th>Ältester</th><th>Neuester</th><th>Währung</th><th>Credits</th></tr>
+      ${rows.map((r) => `<tr>
+        <td>${esc(r.label)}</td>
+        <td class="${r.ok ? 'pos' : 'neg'}">${r.ok ? 'OK' : esc(r.error)}</td>
+        <td>${r.cors ? 'ja' : 'nein'}</td>
+        <td class="num">${r.points ?? '–'}</td>
+        <td>${esc(r.oldest ?? '–')}</td>
+        <td>${esc(r.newest ?? '–')}</td>
+        <td>${esc(r.currency ?? '–')}</td>
+        <td>${esc(r.credits ?? '–')}</td>
+      </tr>`).join('')}
+    </table></div>`;
+  };
+
+  // Keyless probe: a simple GET without custom headers needs no CORS preflight.
+  // If this works but keyed calls fail with a network error, the Authorization header is blocked.
+  $('progress').textContent = 'CORS-Test ohne Key …';
+  const probe = await call('time_series', { symbol: 'MAIN', interval: '1day', outputsize: 1 }, false);
+  const probeText = probe.cors ? 'fehlgeschlagen (CORS blockiert schon einfache Anfragen)' : `Antwort erhalten (HTTP ${probe.status}), CORS für einfache Anfragen OK`;
+
+  const before = await usage();
+  for (const [i, line] of lines.entries()) {
+    if (i) { $('progress').textContent = `Warte wegen Limit (8/Minute) … ${i}/${lines.length}`; await sleep(DELAY_MS); }
+    $('progress').textContent = `${i + 1}/${lines.length}: ${line.label}`;
+    const r = await call('time_series', { symbol: line.symbol, interval: '1day', start_date: from, order: 'asc', outputsize: 5000, ...line.extra });
+    const values = r.data?.values || [];
+    rows.push({
+      label: line.label,
+      ok: r.ok,
+      cors: r.cors,
+      error: r.error,
+      credits: r.credits,
+      points: r.ok ? values.length : null,
+      oldest: values[0]?.datetime,
+      newest: values.at(-1)?.datetime,
+      currency: r.data?.meta?.currency || r.data?.meta?.currency_quote,
+      exchange: r.data?.meta?.exchange,
+    });
+    render();
+    if (r.status === 429) { rows.push({ label: 'Rest', ok: false, cors: false, error: 'Abgebrochen wegen Limit (429)' }); break; }
+  }
+  await sleep(1000);
+  const after = await usage();
+
+  const summary = `<dl>
+      <dt>CORS-Test ohne Key</dt><dd>${esc(probeText)}</dd>
+      <dt>Nutzung vorher</dt><dd>${esc(usageText(before))}</dd>
+      <dt>Nutzung nachher</dt><dd>${esc(usageText(after))}</dd>
+    </dl>`;
+  render(summary + '<div class="row"><button id="copy">Ergebnis kopieren</button></div>');
+  $('copy').addEventListener('click', copyReport);
+
+  lastReport = [
+    `Spike Twelve Data, ${new Date().toISOString().slice(0, 10)}, ab ${from}`,
+    `CORS-Test ohne Key: ${probeText}`,
+    `Nutzung vorher: ${usageText(before)}`,
+    `Nutzung nachher: ${usageText(after)}`,
+    '',
+    'Symbol | Status | CORS-Fehler | Punkte | Ältester | Neuester | Währung | Börse | Credits',
+    ...rows.map((r) => [r.label, r.ok ? 'OK' : r.error, r.cors ? 'ja' : 'nein', r.points ?? '–', r.oldest ?? '–', r.newest ?? '–', r.currency ?? '–', r.exchange ?? '–', r.credits ?? '–'].join(' | ')),
+  ].join('\n');
+  $('progress').textContent = 'Fertig.';
+  $('run').disabled = false;
+}
+
+async function copyReport() {
+  try {
+    await navigator.clipboard.writeText(lastReport);
+    $('copy').textContent = 'Kopiert';
+  } catch {
+    $('out').insertAdjacentHTML('beforeend', `<pre>${esc(lastReport)}</pre>`);
+  }
+}
+
+async function search() {
+  const r = await call('symbol_search', { symbol: $('search').value.trim(), show_plan: 'true', outputsize: 30 }, Boolean(apiKey()));
+  if (!r.ok) { $('search-out').innerHTML = `<p class="neg">${esc(r.error)}</p>`; return; }
+  $('search-out').innerHTML = `<div class="table-wrap"><table>
+    <tr><th>Symbol</th><th>Name</th><th>Börse</th><th>MIC</th><th>Währung</th><th>Plan</th></tr>
+    ${(r.data.data || []).map((d) => `<tr><td>${esc(d.symbol)}</td><td>${esc(d.instrument_name)}</td><td>${esc(d.exchange)}</td><td>${esc(d.mic_code)}</td><td>${esc(d.currency)}</td><td>${esc(d.access?.plan ?? '–')}</td></tr>`).join('')}
+  </table></div>`;
+}
+
+$('run').addEventListener('click', run);
+$('search-run').addEventListener('click', search);
+</script>
+</body>
+</html>
