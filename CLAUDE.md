@@ -1,30 +1,34 @@
 # DivLens
 
-Minimal, local-first portfolio viewer (PWA). Imports a Trade Republic CSV export and shows performance relative to the invested amount, with dividends optionally included.
+Minimal, local-first portfolio viewer (PWA). Imports a Trade Republic CSV export and shows the portfolio like the depot view of Trade Republic or Scalable: one graph (optionally including received dividends), the positions below it, and a detail view per position.
 
-Full requirements: `docs/pflichtenheft.md` (German). If this file and the spec conflict, ask before deciding.
+Requirements (German):
+- `docs/aenderungsauftrag-v2.md`: graph overview, price history. **Wins on any conflict.**
+- `docs/pflichtenheft.md`: original spec, still valid where v2 does not override it.
+
+If this file and the specs conflict, ask before deciding.
 
 ## Hard constraints
 
 - Vanilla HTML/CSS/JS, ES modules. No framework, no bundler, no build step.
 - No backend. Static hosting on GitHub Pages must work as-is.
 - All data stays in the browser (IndexedDB). Nothing is uploaded anywhere.
-- Zero maintenance: the app must be fully usable without any external price service.
+- Zero maintenance: the app must stay usable without any external price service (fallback graph, manual price).
 - All source code, comments, identifiers, commit messages and README in English.
 - UI language: German.
 - Minimal and spartan UI, mobile-first. Do not add features outside the scope below.
 
-## Scope v1.0
+## Scope v2
 
-In scope:
-- Trade Republic CSV import (add mode and "start fresh" mode)
-- Deduplication, positions list, dividends view
-- Performance in EUR and %, per position and total
-- Toggle: include dividends in performance on/off
-- JSON backup export/import
-- Offline PWA (service worker, manifest)
+Done in v1 and unchanged: parser, dedup, database, import (add / start fresh), backup, dividends list, transactions list, offline PWA.
 
-Out of scope (backlog): other brokers, XIRR, FIFO, depot transfers, dividend calendar, sector/country weighting, tax reports, any backend.
+v2 adds:
+- **Overview (start page):** total result in EUR and %, one graph of the portfolio value over time, period chips `1W 1M 3M YTD 1J Max` (affect graph and headline), options "Dividenden einrechnen", "brutto" (only effective while dividends are included, default net) and "Dividendenrendite anzeigen". Below: positions with name, current value, result EUR / %, sorted by value. Closed positions via switch.
+- **Graph:** market value of all positions over time; with dividends included the line is value + cumulative dividends. Finger/mouse marker shows date and value.
+- **Position detail** (tap on a position): same graph, periods and options for this position only. Figures: shares, average buy price, current value, result EUR / %, dividends received, dividend yield. Lists of its dividends (date, amount) and its buys/sells.
+- **Navigation:** overview is the start page; Dividenden, Umsätze, Import, Daten move into a menu.
+
+Out of scope (backlog): other brokers, XIRR, FIFO, depot transfers, dividend calendar, annualized dividend yield, sector/country weighting, tax reports, any backend.
 
 ## Metrics (per position, and summed for the total)
 
@@ -37,12 +41,27 @@ Out of scope (backlog): other brokers, XIRR, FIFO, depot transfers, dividend cal
 | Price result | W + E - I |
 | Total result | Price result + D |
 | Performance % | Result / I |
-| Dividend quota | D / I |
+| Dividend yield (personal) | D / I, shown in % ("Dividendenrendite"; v1 called it dividend quota) |
 
 - The toggle only adds or removes D in total result and performance. D is always shown separately.
 - Without a price, W is unknown: show dividend quota and realized result only, never guess a price.
 - Closed positions (shares = 0) are hidden by default via a switch. Their dividends still count in totals.
 - Example: NVIDIA, buy 149.10 + 1.00 fee, sell 184.20 - 1.00 fee, W = 0 -> price result +33.10 EUR (+22.1 %).
+
+### Time series and periods (v2)
+
+| Value | Definition |
+|---|---|
+| Value(t) | Shares(t) x close(t), in EUR |
+| Cum. dividends(t) | Sum of all dividends up to t (net or gross) |
+| Result (Max) | Value + proceeds + dividends - invested |
+| Percent (Max) | Result / invested |
+| Result (period) | Value(end) - Value(start) - buys + sells in period (+ dividends in period, if on) |
+| Percent (period) | Result / (Value(start) + buys in period) |
+
+- Period percent is a deliberate simplification (no XIRR). Pin the formula with a test.
+- Foreign currency: USD closes are converted with the EUR/USD daily rate. The FX effect is part of the result, as at TR.
+- Buys incl. fee, sells minus fee (as before).
 
 ## Trade Republic CSV
 
@@ -84,18 +103,33 @@ Rules:
   - Offer an automatic JSON backup download first.
   - Keep settings and price data.
 
-## Prices
+## Price history
 
-- Manual price per position is always available.
-- Optional bring-your-own API key (stored locally, never exported or logged):
-  [Twelve Data](https://twelvedata.com), [Finnhub](https://finnhub.io), [Alpha Vantage](https://www.alphavantage.co).
-- Put providers behind `getQuote(isin)`. Mapping ISIN -> ticker is user-editable.
-- History = value snapshots stored locally whenever the app is opened or prices are updated. Show gaps honestly in charts.
+No price history, no graph. Rules:
+- Cache daily closes per position and EUR/USD in IndexedDB. Fetch only missing days, at most once per day.
+- Providers behind `getDailyHistory(symbol, from, to)`:
+  - First choice: [Twelve Data](https://twelvedata.com) (free plan reportedly 800 calls/day, 8/minute; unverified).
+  - Maybe later: [Alpha Vantage](https://www.alphavantage.co) (free plan 25 calls/day; full history may not be free).
+  - Dropped: Finnhub (candles not in the free plan).
+- Symbol mapping ISIN -> symbol is editable in "Daten", with a suggestion from the provider's symbol search. Expected symbols: MAIN, ARCC, HTGC, CSWC (US), MUV2 (Xetra).
+- Respect rate limits: batch requests, show progress, stop cleanly on a limit error and resume on next open.
+- Fallback without key or without prices for a position:
+  - Graph from transactions: "invested" as a step line plus cumulative dividends.
+  - UI hint: "Keine Kurshistorie, Marktwert nicht verfügbar" (instead of "Kurs fehlt").
+  - Manual current price stays possible.
 - Do not add Yahoo endpoints or third-party CORS proxies.
+
+## API key (bring your own)
+
+- Never hardcode the key. Never put it in the repo, a URL, logs, error messages or the backup export.
+- Enter it in a password input field.
+- App: store it locally in the settings area ("Daten"). It never leaves the browser except in requests to the chosen provider.
+- Send it as an HTTP header if the provider supports that, not as a URL parameter.
+- No server, no proxy.
 
 ## Storage and persistence
 
-- IndexedDB for transactions, prices, snapshots, settings.
+- IndexedDB for transactions, prices, price history, settings.
 - Call `navigator.storage.persist()` on first run.
 - Remind the user to export a JSON backup periodically.
 
@@ -104,6 +138,7 @@ Rules:
 - Use `test/fixtures/tr-export.csv` (anonymized real export) as the parser fixture.
 - Parser tests must cover: buy with fee, sell with negative shares, dividend with tax and FX, ignored transfers, duplicate re-import, unknown type.
 - Metric tests: use the NVIDIA example above plus dividend gross/net checks.
+- v2: cover every rule in "Time series and periods" with tests.
 - Never commit real names, IBANs or unredacted exports.
 
 ## Suggested structure
@@ -122,14 +157,31 @@ test/
   fixtures/
 docs/
   pflichtenheft.md
+  aenderungsauftrag-v2.md
+spike/            throwaway test pages, not part of the app or the service worker
 ```
 
 ## Working agreements
 
 - Keep it small. Prefer fewer files and less code over abstractions.
-- Ask before adding dependencies. Charts: [uPlot](https://github.com/leeoniya/uPlot) or [Chart.js](https://www.chartjs.org), loaded locally (no CDN) so the PWA works offline.
+- Ask before adding dependencies.
+- Graph: prefer an own SVG line chart without dependencies if it stays small (roughly under 150 lines). Otherwise [uPlot](https://github.com/leeoniya/uPlot), stored locally in the repo (no CDN); ask before adding it.
+- Dark and light theme follow the system setting.
 - Money values: store as integer cents or use a decimal-safe approach; never accumulate floats.
 - Dates as ISO strings (`YYYY-MM-DD`); display in German format.
+
+## Milestones v2
+
+| Step | Content |
+|---|---|
+| 0 | Spike `spike/index.html`: fetch daily closes since 2026-03-01 for MAIN, ARCC, HTGC, CSWC, MUV2 (Xetra) and EUR/USD from the browser; report result to Alex |
+| 1 | Data layer: price history cache, daily values from transactions, calculation rules with tests |
+| 2 | Overview with graph, period chips, options |
+| 3 | Position detail |
+| 4 | Fallback without prices |
+| 5 | Navigation cleanup, existing tabs into the menu |
+
+Acceptance: with `test/fixtures/tr-export.csv` the graph starts 2026-03-23; "Dividenden einrechnen" and brutto/netto visibly change the line; tapping a position shows its own graph; without a key the fallback with hint appears; all rules in "Time series and periods" are tested.
 
 ## Git workflow
 
